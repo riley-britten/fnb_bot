@@ -1,15 +1,19 @@
 const Bot = require('keybase-bot'),
-  fs = require('fs');
+  fs = require('fs'),
+  cron = require('node-cron');
+const BackgroundScheduledTask = require('node-cron/src/background-scheduled-task');
 const username = process.env.KB_USERNAME,
   paperkey = process.env.KB_PAPERKEY,
   teamName = process.env.KB_TEAM_NAME,
   reserveChannelName = process.env.KB_RESERVE_CHANNEL,
   postChannelName = process.env.KB_POST_CHANNEL,
   pastWeekLimit = parseInt(process.env.PAST_WEEK_LIMIT),
-  dataFile = process.env.DATA_FILE;
+  dataFile = process.env.DATA_FILE,
+  commandPrefix = process.env.COMMAND_PREFIX;
 
 const bot = new Bot();
 let data = {};
+let postChannel;
 
 async function main() {
   if (fs.existsSync(dataFile)) {
@@ -23,10 +27,10 @@ async function main() {
     const convs = await bot.chat.listChannels(teamName);
     const channels = convs.map(c => {return c.channel});
     const reserveChannel = channels.filter(c => c.topicName === reserveChannelName)[0];
-    const postChannel = channels.filter(c => c.topicName === postChannelName)[0];
+    postChannel = channels.filter(c => c.topicName === postChannelName)[0];
 
     await bot.chat.send(postChannel, {body: 'The bot will post announcements here'});
-    setTimeout(displayWeeklyUpdate(postChannel), new Date().setDate(5 - new Date().getDay()).getTime() - new Date().getTime());
+    cron.schedule("0 8 * * 6", displayWeeklyUpdate);
     await bot.chat.watchChannelForNewMessages(reserveChannel, onMessage, onError);
   } catch (error) {
     console.error(error)
@@ -35,9 +39,9 @@ async function main() {
   }
 }
 
-async function displayWeeklyUpdate(channel) {
+async function displayWeeklyUpdate() {
   purgeOldRecords();
-  let responseBody = `Reservations:\n`
+  let responseBody = `Reservations:\n`;
   for (const r of data.reservations) {
     if (new Date(r.date).getTime() - new Date().getTime() < 7 * 24 * 60 * 60 * 1000) {
       responseBody += `${r.user}: ${r.type} on ${new Date(r.date).toDateString()}\n`;
@@ -46,7 +50,6 @@ async function displayWeeklyUpdate(channel) {
   await bot.chat.send(channel, {
     body: responseBody,
   });
-  setTimeout(displayWeeklyUpdate(channel), new Date().setDate(5 - new Date().getDay()).getTime() - new Date().getTime());
 }
 
 async function displaySchedule(conversationId) {
@@ -71,10 +74,11 @@ async function makeReservation(message) {
     });
   }
   const conflictingReservations = data.reservations.filter(r => 
-    (new Date(r.date).getTime() === newReservation.date.getTime() ||
+    (new Date(r.date).getTime() === newReservation.date.getTime() &&
       r.type === newReservation.type));
   if (conflictingReservations.length > 0) {
     const c = conflictingReservations[0];
+    console.log(`Existing reservation ${JSON.stringify(c)} conflicts with new reservation ${JSON.stringify(newReservation)}`);
     bot.chat.send(message.conversationId, {
       body: `This slot is already reserved:
       ${c.user}: ${c.type} on ${new Date(c.date).toDateString()}.
@@ -89,7 +93,7 @@ async function makeReservation(message) {
   });
 }
 
-async function makeReservation(message) {
+async function makeReservationForOther(message) {
   const user = message.sender.username;
   if (!data.admins.includes(user)) {
     await bot.chat.send(message.conversationId, {
@@ -104,14 +108,15 @@ async function makeReservation(message) {
   }
   if (!data.known_types.includes(newReservation.type)) {
     await bot.chat.send(message.conversationId, {
-      body: 'This is not a reservation type I recognize. Was it a typo?',
+      body: 'This is not a reservation type I recognize. I will make the reservation, please delete it if it was made in error',
     });
   }
   const conflictingReservations = data.reservations.filter(r => 
-    (new Date(r.date).getTime() === newReservation.date.getTime() ||
+    (new Date(r.date).getTime() === newReservation.date.getTime() &&
       r.type === newReservation.type));
   if (conflictingReservations.length > 0) {
     const c = conflictingReservations[0];
+    console.log(`Existing reservation ${JSON.stringify(c)} conflicts with new reservation ${JSON.stringify(newReservation)}`);
     bot.chat.send(message.conversationId, {
       body: `This slot is already reserved:
       ${c.user}: ${c.type} on ${new Date(c.date).toDateString()}.
@@ -122,7 +127,7 @@ async function makeReservation(message) {
   data.reservations.push(newReservation);
   fs.writeFileSync(dataFile, JSON.stringify(data));
   await bot.chat.send(message.conversationId, {
-    body: 'Reservation made',
+    body: 'Reservation made.',
   });
 }
 
@@ -194,6 +199,36 @@ async function removeAdmin(message) {
   }
 }
 
+async function deleteAll(message) {
+  const user = message.sender.username;
+  if (!data.admins.includes(user)) {
+    await bot.chat.send(message.conversationId, {
+      body: `You do not have permissions to delete all scheduled reservations`,
+    });
+    return;
+  }
+  const numRecords = data.reservations.length;
+  data.reservations = [];
+  fs.writeFileSync(dataFile, JSON.stringify(data));
+  await bot.chat.send(message.conversationId, {
+    body: `Deleted ${numRecords} records`,
+  });
+}
+
+async function killBot(message) {
+  const user = message.sender.username;
+  if (!data.admins.includes(user)) {
+    await bot.chat.send(message.conversationId, {
+      body: `You do not have permissions to kill the bot`,
+    });
+    return;
+  }
+  await bot.chat.send(message.conversationId, {
+    body: `Shutting down`,
+  });
+  process.exit();
+}
+
 async function listAdmins(conversationId) {
   let responseBody = `Admins:\n`
   for (const r of data.admins) {
@@ -206,16 +241,21 @@ async function listAdmins(conversationId) {
 
 async function displayHelp(conversationId) {
   await bot.chat.send(conversationId, {
-    body: `This bot is a work in progress and does not yet have a README. Contact aeou1324 for help`,
+    body: 
+`Usage:
+!reservation-bot list -- list all reservations
+!reservation-bot make <date> <type> -- make a reservation
+!reservation-bot delete <date> <type> -- delete a reservation
+This bot is a work in progress and does not yet have complete documentation. Contact aeou1324 for help`,
   });
 }
 
 async function onMessage(message) {
-  if (message.content.text.body.split(' ')[0] !== '/bot') {
+  if (message.content.text.body.split(' ')[0] !== commandPrefix) {
     return;
   }
   switch (message.content.text.body.split(' ')[1]) {
-    case 'existing':
+    case 'list':
       await displaySchedule(message.conversationId);
       break;
     case 'make':
@@ -239,6 +279,12 @@ async function onMessage(message) {
     case 'help':
       await displayHelp(message.conversationId);
       break
+    case 'delete-all':
+      await deleteAll(message);
+      break;
+    case 'kill':
+      await killBot(message);
+      break;
     default:
       await bot.chat.send(message.conversationId, {
         body: `I didn't recognize that request`,
@@ -247,7 +293,8 @@ async function onMessage(message) {
 }
 
 function purgeOldRecords() {
-  const cutoff = new Date().setDate(new Date().getDate() - 7 * pastWeekLimit);
+  let cutoff = new Date();
+  cutoff.setDate(new Date().getDate() - 7 * pastWeekLimit);
   data.reservations = data.reservations.filter(r => new Date(r.date).getTime() > cutoff.getTime());
   fs.writeFileSync(dataFile, JSON.stringify(data));
 }
