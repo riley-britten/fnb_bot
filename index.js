@@ -26,12 +26,26 @@ async function main() {
     const postChannel = channels.filter(c => c.topicName === postChannelName)[0];
 
     await bot.chat.send(postChannel, {body: 'The bot will post announcements here'});
+    setTimeout(displayWeeklyUpdate(postChannel), new Date().setDate(5 - new Date().getDay()).getTime() - new Date().getTime());
     await bot.chat.watchChannelForNewMessages(reserveChannel, onMessage, onError);
   } catch (error) {
     console.error(error)
   } finally {
     await bot.deinit()
   }
+}
+
+async function displayWeeklyUpdate(channel) {
+  let responseBody = `Reservations:\n`
+  for (const r of data.reservations) {
+    if (new Date(r.date).getTime() - new Date().getTime() < 7 * 24 * 60 * 60 * 1000) {
+      responseBody += `${r.user}: ${r.type} on ${new Date(r.date).toDateString()}\n`;
+    }
+  }
+  await bot.chat.send(channel, {
+    body: responseBody,
+  });
+  setTimeout(displayWeeklyUpdate(channel), new Date().setDate(5 - new Date().getDay()).getTime() - new Date().getTime());
 }
 
 async function displaySchedule(conversationId) {
