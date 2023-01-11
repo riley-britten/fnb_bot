@@ -1,0 +1,16 @@
+version: "3.4"
+services:
+  keybase-bot:
+    build:
+      context: .
+      network: host
+    environment:
+      - KB_USERNAME=${KB_USERNAME}
+      - KB_PAPERKEY=${KB_PAPERKEY}
+      - KB_TEAM_NAME=${KB_TEAM_NAME}
+      - KB_RESERVE_CHANNEL=${KB_RESERVE_CHANNEL}
+      - KB_POST_CHANNEL=${KB_POST_CHANNEL}
+      - PAST_WEEK_LIMIT=${PAST_WEEK_LIMIT}
+      - DATA_FILE=/app/fnb_bot_storage/data.json
+    volumes:
+      - ../fnb_bot_storage:/app/fnb_bot_storage
