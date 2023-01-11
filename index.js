@@ -36,6 +36,7 @@ async function main() {
 }
 
 async function displayWeeklyUpdate(channel) {
+  purgeOldRecords();
   let responseBody = `Reservations:\n`
   for (const r of data.reservations) {
     if (new Date(r.date).getTime() - new Date().getTime() < 7 * 24 * 60 * 60 * 1000) {
@@ -243,6 +244,12 @@ async function onMessage(message) {
         body: `I didn't recognize that request`,
       });
   }
+}
+
+function purgeOldRecords() {
+  const cutoff = new Date().setDate(new Date().getDate() - 7 * pastWeekLimit);
+  data.reservations = data.reservations.filter(r => new Date(r.date).getTime() > cutoff.getTime());
+  fs.writeFileSync(dataFile, JSON.stringify(data));
 }
 
 async function onError(err) {
