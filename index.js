@@ -11,12 +11,16 @@ const username = process.env.KB_USERNAME,
   commandPrefix = process.env.COMMAND_PREFIX,
   purgeCron = process.env.PURGE_CRON;
 
-const bot = new Bot();
+let bot = new Bot();
 let data = {};
 let reserveChannel,
   postChannel;
 
-async function main() {
+function main() {
+  initialize();
+}
+
+async function initialize() {
   if (fs.existsSync(dataFile)) {
     data = JSON.parse(fs.readFileSync(dataFile, 'utf-8'));
   }
@@ -30,13 +34,13 @@ async function main() {
     reserveChannel = channels.filter(c => c.topicName === reserveChannelName)[0];
     postChannel = channels.filter(c => c.topicName === postChannelName)[0];
 
-    await bot.chat.send(postChannel, 
-      {body: 'Hi, all! I will periodically be posting schedule updates in this channel.'}
-    );
     cron.schedule(purgeCron, purgeOldRecords);
     for (const m of data.announcements) {
       cron.schedule(m.cron, scheduleAnnouncement(m))
     }
+    await bot.chat.send(reserveChannel, 
+      {body: `Reservation bot has started. I will listen for requests in this channel.`
+    });
     await bot.chat.watchChannelForNewMessages(reserveChannel, onMessage, onError);
   } catch (error) {
     console.error(error)
@@ -335,8 +339,31 @@ async function displayHelp(conversationId) {
 !reservation-bot list -- list all reservations
 !reservation-bot make <date> <type> -- make a reservation
 !reservation-bot delete <date> <type> -- delete a reservation
-This bot is a work in progress and does not yet have complete documentation. Contact aeou1324 for help`,
+!reservation-bot list-admins -- list admin usernames, contact them if you need an admin
+!reservation-bot admin-help -- display admin commands
+This bot is a work in progress. Contact aeou1324 for support.`,
   });
+}
+
+async function displayAdminHelp(message) {
+  const user = message.sender.username;
+  if (!data.admins.includes(user)) {
+    await bot.chat.send(message.conversationId, {
+      body: `You do not have permissions to display admin help`,
+    });
+    return;
+  }
+  await bot.chat.send(message.conversationId, {
+    body: 
+`WARNING: These commands run without asking for confirmation, be careful!
+Admin usage:
+!reservation-bot make-for-other <date> <type> <username> -- make a reservation for someone else
+!reservation-bot delete-all -- delete all reservations
+!reservation-bot reload -- reload config file
+!reservation-bot kill -- shut down the bot
+!reservation-bot make-admin <username> -- make a user an admin
+!reservation-bot remove-admin <username> -- revoke admin privileges`
+  })
 }
 
 async function onMessage(message) {
@@ -372,11 +399,19 @@ async function onMessage(message) {
     case 'help':
       await displayHelp(message.conversationId);
       break
+    case 'admin-help':
+      await displayAdminHelp(message);
+      break;
     case 'delete-all':
       await deleteAll(message);
       break;
     case 'kill':
       await killBot(message);
+      break;
+    case 'reload':
+      await bot.deinit();
+      bot = new Bot();
+      await initialize();
       break;
     default:
       await bot.chat.send(message.conversationId, {
