@@ -347,6 +347,9 @@ This bot is a work in progress and does not yet have complete documentation. Con
 }
 
 async function onMessage(message) {
+  if (message.content.type !== 'text') {
+    return;
+  }
   if (message.content.text.body.split(' ')[0] !== commandPrefix) {
     return;
   }
