@@ -9,11 +9,14 @@ const username = process.env.KB_USERNAME,
   pastWeekLimit = parseInt(process.env.PAST_WEEK_LIMIT),
   dataFile = process.env.DATA_FILE,
   commandPrefix = process.env.COMMAND_PREFIX,
-  announcementCron = process.env.ANNOUNCEMENT_CRON;
+  announcementCron = process.env.ANNOUNCEMENT_CRON,
+  purgeCron = process.env.PURGE_CRON;
 
 const bot = new Bot();
 let data = {};
 let postChannel;
+
+// TODO: Error handling throughout
 
 async function main() {
   if (fs.existsSync(dataFile)) {
@@ -29,8 +32,12 @@ async function main() {
     const reserveChannel = channels.filter(c => c.topicName === reserveChannelName)[0];
     postChannel = channels.filter(c => c.topicName === postChannelName)[0];
 
-    await bot.chat.send(postChannel, {body: 'The bot will post announcements here'});
-    cron.schedule(announcementCron, displayWeeklyUpdate);
+    await bot.chat.send(postChannel, 
+      {body: 'Hi, all! I will periodically be posting schedule updates in this channel.'}
+    );
+    cron.schedule(announcementCron, displayPeriodicUpdate);
+    cron.schedule(purgeCron, purgeOldRecords);
+    // TODO: Add distro show of hands cron
     await bot.chat.watchChannelForNewMessages(reserveChannel, onMessage, onError);
   } catch (error) {
     console.error(error)
@@ -39,15 +46,15 @@ async function main() {
   }
 }
 
-async function displayWeeklyUpdate() {
-  purgeOldRecords();
-  let responseBody = `Reservations:\n`;
+async function displayPeriodicUpdate() {
+  let responseBody = `Reservations for next week:\n`;
   for (const r of data.reservations) {
-    if (new Date(r.date).getTime() - new Date().getTime() < 7 * 24 * 60 * 60 * 1000) {
+    if (new Date().getTime() - new Date(r.date).getTime() < 7 * 24 * 60 * 60 * 1000) {
       responseBody += `${r.user}: ${r.type} on ${new Date(r.date).toDateString()}\n`;
     }
   }
-  await bot.chat.send(channel, {
+  // TODO: Request volunteers for this week if needed
+  await bot.chat.send(postChannel, {
     body: responseBody,
   });
 }
@@ -293,10 +300,12 @@ async function onMessage(message) {
 }
 
 function purgeOldRecords() {
+  const initialRecords = data.reservations.length;
   let cutoff = new Date();
   cutoff.setDate(new Date().getDate() - 7 * pastWeekLimit);
   data.reservations = data.reservations.filter(r => new Date(r.date).getTime() > cutoff.getTime());
   fs.writeFileSync(dataFile, JSON.stringify(data));
+  console.log(`Purged ${initialRecords - data.reservations.length} records`);
 }
 
 async function onError(err) {
