@@ -1,7 +1,6 @@
 const Bot = require('keybase-bot'),
   fs = require('fs'),
   cron = require('node-cron');
-const BackgroundScheduledTask = require('node-cron/src/background-scheduled-task');
 const username = process.env.KB_USERNAME,
   paperkey = process.env.KB_PAPERKEY,
   teamName = process.env.KB_TEAM_NAME,
@@ -9,7 +8,8 @@ const username = process.env.KB_USERNAME,
   postChannelName = process.env.KB_POST_CHANNEL,
   pastWeekLimit = parseInt(process.env.PAST_WEEK_LIMIT),
   dataFile = process.env.DATA_FILE,
-  commandPrefix = process.env.COMMAND_PREFIX;
+  commandPrefix = process.env.COMMAND_PREFIX,
+  announcementCron = process.env.ANNOUNCEMENT_CRON;
 
 const bot = new Bot();
 let data = {};
@@ -30,7 +30,7 @@ async function main() {
     postChannel = channels.filter(c => c.topicName === postChannelName)[0];
 
     await bot.chat.send(postChannel, {body: 'The bot will post announcements here'});
-    cron.schedule("0 8 * * 6", displayWeeklyUpdate);
+    cron.schedule(announcementCron, displayWeeklyUpdate);
     await bot.chat.watchChannelForNewMessages(reserveChannel, onMessage, onError);
   } catch (error) {
     console.error(error)
