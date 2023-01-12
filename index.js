@@ -20,8 +20,6 @@ let reserveChannel,
   postChannel,
   distroChannel;
 
-// TODO: Error handling throughout
-
 async function main() {
   if (fs.existsSync(dataFile)) {
     data = JSON.parse(fs.readFileSync(dataFile, 'utf-8'));
@@ -116,6 +114,11 @@ async function makeReservation(message) {
     if (!data.known_types.includes(newReservation.type)) {
       await bot.chat.send(message.conversationId, {
         body: 'This is not a reservation type I recognize. Was it a typo?',
+      });
+    }
+    if (newReservation.date.getTime() < new Date.getTime()) {
+      await bot.chat.send(message.conversationId, {
+        body: 'This reservation is in the past. Was that a typo?',
       });
     }
     const conflictingReservations = data.reservations.filter(r => 
