@@ -11,7 +11,7 @@ const username = process.env.KB_USERNAME,
   commandPrefix = process.env.COMMAND_PREFIX,
   purgeCron = process.env.PURGE_CRON;
 
-const bot = new Bot();
+let bot = new Bot();
 let data = {};
 let reserveChannel,
   postChannel;
@@ -38,6 +38,9 @@ async function initialize() {
     for (const m of data.announcements) {
       cron.schedule(m.cron, scheduleAnnouncement(m))
     }
+    await bot.chat.send(reserveChannel, 
+      {body: `Reservation bot has started. I will listen for requests in this channel.`
+    });
     await bot.chat.watchChannelForNewMessages(reserveChannel, onMessage, onError);
   } catch (error) {
     console.error(error)
@@ -407,6 +410,7 @@ async function onMessage(message) {
       break;
     case 'reload':
       await bot.deinit();
+      bot = new Bot();
       await initialize();
       break;
     default:
