@@ -6,19 +6,15 @@ const username = process.env.KB_USERNAME,
   teamName = process.env.KB_TEAM_NAME,
   reserveChannelName = process.env.KB_RESERVE_CHANNEL,
   postChannelName = process.env.KB_POST_CHANNEL,
-  distroChannelName = process.env.KB_DISTRO_CHANNEL,
   pastWeekLimit = parseInt(process.env.PAST_WEEK_LIMIT),
   dataFile = process.env.DATA_FILE,
   commandPrefix = process.env.COMMAND_PREFIX,
-  announcementCron = process.env.ANNOUNCEMENT_CRON,
-  purgeCron = process.env.PURGE_CRON,
-  showOfHandsCron = process.env.SHOW_OF_HANDS_CRON;
+  purgeCron = process.env.PURGE_CRON;
 
 const bot = new Bot();
 let data = {};
 let reserveChannel,
-  postChannel,
-  distroChannel;
+  postChannel;
 
 async function main() {
   if (fs.existsSync(dataFile)) {
@@ -33,14 +29,14 @@ async function main() {
     const channels = convs.map(c => {return c.channel});
     reserveChannel = channels.filter(c => c.topicName === reserveChannelName)[0];
     postChannel = channels.filter(c => c.topicName === postChannelName)[0];
-    distroChannel = channels.filter(c => c.topicName === distroChannelName);
 
     await bot.chat.send(postChannel, 
       {body: 'Hi, all! I will periodically be posting schedule updates in this channel.'}
     );
-    cron.schedule(announcementCron, displayPeriodicUpdate);
     cron.schedule(purgeCron, purgeOldRecords);
-    cron.schedule(showOfHandsCron, distroShowOfHands)
+    for (const m of data.announcements) {
+      cron.schedule(m.cron, scheduleAnnouncement(m))
+    }
     await bot.chat.watchChannelForNewMessages(reserveChannel, onMessage, onError);
   } catch (error) {
     console.error(error)
@@ -49,42 +45,39 @@ async function main() {
   }
 }
 
-async function displayPeriodicUpdate() {
-  try {
-    let responseBody = `Reservations for next week:\n`;
-    let haveDistro = false;
-    let haveCooking = false;
-    for (const r of data.reservations) {
-      const timeAfterNow = new Date(r.date).getTime() - new Date().getTime();
-      if (timeAfterNow > 0 && timeAfterNow < 7 * 24 * 60 * 60 * 1000) {
-        responseBody += `${r.user}: ${r.type} on ${new Date(r.date).toDateString()}\n`;
-        if (r.type === 'cooking') {
-          haveCooking = true;
-        } else if (r.type === 'distro') {
-          haveDistro = true;
+function scheduleAnnouncement(announcement) {
+  console.log("Scheduling announcement", announcement);
+  return async () => {
+    try {
+      let responseBody = announcement.text;
+      if (announcement.includeSchedule) {
+        let haveDistro = false;
+        let haveCooking = false;
+        for (const r of data.reservations) {
+          const timeAfterNow = new Date(r.date).getTime() - new Date().getTime();
+          if (announcement.allReservations || (timeAfterNow > 0 && timeAfterNow < 7 * 24 * 60 * 60 * 1000)) {
+            responseBody += `${r.user}: ${r.type} on ${new Date(r.date).toDateString()}\n`;
+            if (new Date(r.date).getDay() === 0 && r.type === 'cooking') {
+              haveCooking = true;
+            } else if (new Date(r.date).getDay() === 0 && r.type === 'distro') {
+              haveDistro = true;
+            }
+          }
+        }
+        if (announcement.requestVolunteers && (!haveCooking || !haveDistro)) {
+          responseBody += `\nWe could still use volunteers for next week. Please post in ${reserveChannelName} to volunteer.`;
         }
       }
-    }
-    await bot.chat.send(postChannel, {
-      body: responseBody,
-    });
-    if (!haveCooking || !haveDistro) {
       await bot.chat.send(postChannel, {
-        body: `We could still use volunteers for next week. Please post in ${reserveChannelName} to volunteer.`
+        body: responseBody,
+      });
+    } catch (err) {
+      console.log(err);
+      await bot.chat.send(postChannel, {
+        body: `Failed to display update, see logs for details.`
       })
     }
-  } catch (err) {
-    console.log(err);
-    await bot.chat.send(postChannel, {
-      body: `Failed to display update, see logs for details.`
-    })
   }
-}
-
-async function distroShowOfHands() {
-  await bot.chat.send(postChannel, {
-    body: `Show of hands for distro this week?`,
-  });
 }
 
 async function displaySchedule(conversationId) {
@@ -353,6 +346,7 @@ async function onMessage(message) {
   if (message.content.text.body.split(' ')[0] !== commandPrefix) {
     return;
   }
+  // TODO: Let admins add/delete announcements
   switch (message.content.text.body.split(' ')[1]) {
     case 'list':
       await displaySchedule(message.conversationId);
