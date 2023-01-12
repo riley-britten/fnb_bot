@@ -116,7 +116,7 @@ async function makeReservation(message) {
         body: 'This is not a reservation type I recognize. Was it a typo?',
       });
     }
-    if (newReservation.date.getTime() < new Date.getTime()) {
+    if (newReservation.date.getTime() < new Date().getTime()) {
       await bot.chat.send(message.conversationId, {
         body: 'This reservation is in the past. Was that a typo?',
       });
