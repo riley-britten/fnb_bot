@@ -335,8 +335,30 @@ async function displayHelp(conversationId) {
 !reservation-bot list -- list all reservations
 !reservation-bot make <date> <type> -- make a reservation
 !reservation-bot delete <date> <type> -- delete a reservation
-This bot is a work in progress and does not yet have complete documentation. Contact aeou1324 for help`,
+!reservation-bot list-admins -- list admin usernames, contact them if you need an admin
+!reservation-bot admin-help -- display admin commands
+This bot is a work in progress. Contact aeou1324 for support.`,
   });
+}
+
+async function displayAdminHelp(message) {
+  const user = message.sender.username;
+  if (!data.admins.includes(user)) {
+    await bot.chat.send(message.conversationId, {
+      body: `You do not have permissions to display admin help`,
+    });
+    return;
+  }
+  await bot.chat.send(message.conversationId, {
+    body: 
+`WARNING: These commands run without asking for confirmation, be careful!
+Admin usage:
+!reservation-bot make-for-other <date> <type> <username> -- make a reservation for someone else
+!reservation-bot delete-all -- delete all reservations
+!reservation-bot kill -- shut down the bot
+!reservation-bot make-admin <username> -- make a user an admin
+!reservation-bot remove-admin <username> -- revoke admin privileges`
+  })
 }
 
 async function onMessage(message) {
@@ -372,6 +394,9 @@ async function onMessage(message) {
     case 'help':
       await displayHelp(message.conversationId);
       break
+    case 'admin-help':
+      await displayAdminHelp(message);
+      break;
     case 'delete-all':
       await deleteAll(message);
       break;
