@@ -16,7 +16,11 @@ let data = {};
 let reserveChannel,
   postChannel;
 
-async function main() {
+function main() {
+  initialize();
+}
+
+async function initialize() {
   if (fs.existsSync(dataFile)) {
     data = JSON.parse(fs.readFileSync(dataFile, 'utf-8'));
   }
@@ -30,9 +34,6 @@ async function main() {
     reserveChannel = channels.filter(c => c.topicName === reserveChannelName)[0];
     postChannel = channels.filter(c => c.topicName === postChannelName)[0];
 
-    await bot.chat.send(postChannel, 
-      {body: 'Hi, all! I will periodically be posting schedule updates in this channel.'}
-    );
     cron.schedule(purgeCron, purgeOldRecords);
     for (const m of data.announcements) {
       cron.schedule(m.cron, scheduleAnnouncement(m))
@@ -355,6 +356,7 @@ async function displayAdminHelp(message) {
 Admin usage:
 !reservation-bot make-for-other <date> <type> <username> -- make a reservation for someone else
 !reservation-bot delete-all -- delete all reservations
+!reservation-bot reload -- reload config file
 !reservation-bot kill -- shut down the bot
 !reservation-bot make-admin <username> -- make a user an admin
 !reservation-bot remove-admin <username> -- revoke admin privileges`
@@ -402,6 +404,10 @@ async function onMessage(message) {
       break;
     case 'kill':
       await killBot(message);
+      break;
+    case 'reload':
+      await bot.deinit();
+      await initialize();
       break;
     default:
       await bot.chat.send(message.conversationId, {
