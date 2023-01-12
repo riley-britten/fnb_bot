@@ -6,15 +6,19 @@ const username = process.env.KB_USERNAME,
   teamName = process.env.KB_TEAM_NAME,
   reserveChannelName = process.env.KB_RESERVE_CHANNEL,
   postChannelName = process.env.KB_POST_CHANNEL,
+  distroChannelName = process.env.KB_DISTRO_CHANNEL,
   pastWeekLimit = parseInt(process.env.PAST_WEEK_LIMIT),
   dataFile = process.env.DATA_FILE,
   commandPrefix = process.env.COMMAND_PREFIX,
   announcementCron = process.env.ANNOUNCEMENT_CRON,
-  purgeCron = process.env.PURGE_CRON;
+  purgeCron = process.env.PURGE_CRON,
+  showOfHandsCron = process.env.SHOW_OF_HANDS_CRON;
 
 const bot = new Bot();
 let data = {};
-let postChannel;
+let reserveChannel,
+  postChannel,
+  distroChannel;
 
 // TODO: Error handling throughout
 
@@ -29,15 +33,16 @@ async function main() {
 
     const convs = await bot.chat.listChannels(teamName);
     const channels = convs.map(c => {return c.channel});
-    const reserveChannel = channels.filter(c => c.topicName === reserveChannelName)[0];
+    reserveChannel = channels.filter(c => c.topicName === reserveChannelName)[0];
     postChannel = channels.filter(c => c.topicName === postChannelName)[0];
+    distroChannel = channels.filter(c => c.topicName === distroChannelName);
 
     await bot.chat.send(postChannel, 
       {body: 'Hi, all! I will periodically be posting schedule updates in this channel.'}
     );
     cron.schedule(announcementCron, displayPeriodicUpdate);
     cron.schedule(purgeCron, purgeOldRecords);
-    // TODO: Add distro show of hands cron
+    cron.schedule(showOfHandsCron, distroShowOfHands)
     await bot.chat.watchChannelForNewMessages(reserveChannel, onMessage, onError);
   } catch (error) {
     console.error(error)
@@ -48,14 +53,32 @@ async function main() {
 
 async function displayPeriodicUpdate() {
   let responseBody = `Reservations for next week:\n`;
+  let haveDistro = false;
+  let haveCooking = false;
   for (const r of data.reservations) {
-    if (new Date().getTime() - new Date(r.date).getTime() < 7 * 24 * 60 * 60 * 1000) {
+    const timeAfterNow = new Date(r.date).getTime() - new Date().getTime();
+    if (timeAfterNow > 0 && timeAfterNow < 7 * 24 * 60 * 60 * 1000) {
       responseBody += `${r.user}: ${r.type} on ${new Date(r.date).toDateString()}\n`;
+      if (r.type === 'cooking') {
+        haveCooking = true;
+      } else if (r.type === 'distro') {
+        haveDistro = true;
+      }
     }
   }
-  // TODO: Request volunteers for this week if needed
   await bot.chat.send(postChannel, {
     body: responseBody,
+  });
+  if (!haveCooking || !haveDistro) {
+    await bot.chat.send(postChannel, {
+      body: `We could still use volunteers for next week. Please post in ${reserveChannelName} to volunteer.`
+    })
+  }
+}
+
+async function distroShowOfHands() {
+  await bot.chat.send(postChannel, {
+    body: `Show of hands for distro this week?`,
   });
 }
 
