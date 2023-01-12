@@ -13,6 +13,7 @@ services:
       - PAST_WEEK_LIMIT=${PAST_WEEK_LIMIT}
       - DATA_FILE=/app/fnb_bot_storage/data.json
       - COMMAND_PREFIX=!reservation-bot
-      - ANNOUNCEMENT_CRON=0 8 * * 6
+      - ANNOUNCEMENT_CRON=${ANNOUNCEMENT_CRON}
+      - PURGE_CRON=${PURGE_CRON}
     volumes:
       - ../fnb_bot_storage:/app/fnb_bot_storage
