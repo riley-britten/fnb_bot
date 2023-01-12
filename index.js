@@ -57,9 +57,9 @@ function scheduleAnnouncement(announcement) {
           const timeAfterNow = new Date(r.date).getTime() - new Date().getTime();
           if (announcement.allReservations || (timeAfterNow > 0 && timeAfterNow < 7 * 24 * 60 * 60 * 1000)) {
             responseBody += `${r.user}: ${r.type} on ${new Date(r.date).toDateString()}\n`;
-            if (r.type === 'cooking') {
+            if (new Date(r.date).getDay() === 0 && r.type === 'cooking') {
               haveCooking = true;
-            } else if (r.type === 'distro') {
+            } else if (new Date(r.date).getDay() === 0 && r.type === 'distro') {
               haveDistro = true;
             }
           }
