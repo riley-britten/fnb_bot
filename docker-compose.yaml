@@ -10,7 +10,6 @@ services:
       - KB_TEAM_NAME=${KB_TEAM_NAME}
       - KB_RESERVE_CHANNEL=${KB_RESERVE_CHANNEL}
       - KB_POST_CHANNEL=${KB_POST_CHANNEL}
-      - KB_DISTRO_CHANNEL=${KB_DISTRO_CHANNEL}
       - PAST_WEEK_LIMIT=${PAST_WEEK_LIMIT}
       - DATA_FILE=/app/fnb_bot_storage/data.json
       - COMMAND_PREFIX=!reservation-bot
