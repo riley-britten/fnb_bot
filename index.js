@@ -72,7 +72,7 @@ function scheduleAnnouncement(announcement) {
         if (announcement.requestVolunteers) {
           responseBody += `\n`;
           for (const t of data.expectedTypes) {
-            responseBody += t.messageIfNone + `\n`;
+            if (!t.haveNextWeek) responseBody += t.messageIfNone + `\n`;
           }
         }
       }
