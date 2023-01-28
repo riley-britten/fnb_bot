@@ -1,4 +1,12 @@
 {"admins":["aeou1324"],"known_types":["cooking","distro","cooking-party-host"],
+"expectedTypes":[
+{"name": "cooking-party-host", 
+"messageIfNone": "We could still use a volunteer to host the cooking party this week.",
+"haveNextWeek": false},
+{"name": "distro",
+"messageIfNone": "We could still use an experienced fnb-er to take point at distro this week.",
+"haveNextWeek": false}
+],
 "announcements": [
 {"cron": "*/5 * * * *",
 "text": "Volunteers for the coming week:\n",

@@ -55,21 +55,25 @@ function scheduleAnnouncement(announcement) {
     try {
       let responseBody = announcement.text;
       if (announcement.includeSchedule) {
-        let haveDistro = false;
-        let haveCooking = false;
+        for (const t of data.expectedTypes) {
+          t.haveNextWeek = false;
+        }
         for (const r of data.reservations) {
           const timeAfterNow = new Date(r.date).getTime() - new Date().getTime();
           if (announcement.allReservations || (timeAfterNow > 0 && timeAfterNow < 7 * 24 * 60 * 60 * 1000)) {
             responseBody += `${r.user}: ${r.type} on ${new Date(r.date).toDateString()}\n`;
-            if (new Date(r.date).getDay() === 0 && r.type === 'cooking') {
-              haveCooking = true;
-            } else if (new Date(r.date).getDay() === 0 && r.type === 'distro') {
-              haveDistro = true;
+            for (const t of data.expectedTypes) {
+              if (r.type === t.name) {
+                t.haveNextWeek = true;
+              }
             }
           }
         }
-        if (announcement.requestVolunteers && (!haveCooking || !haveDistro)) {
-          responseBody += `\nWe could still use volunteers for next week. Please post in ${reserveChannelName} to volunteer.`;
+        if (announcement.requestVolunteers) {
+          responseBody += `\n`;
+          for (const t of data.expectedTypes) {
+            responseBody += t.messageIfNone + `\n`;
+          }
         }
       }
       await bot.chat.send(postChannel, {
