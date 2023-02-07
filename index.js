@@ -1,42 +1,41 @@
 const Bot = require('keybase-bot'),
-  fs = require('fs'),
-  cron = require('node-cron');
-const username = process.env.KB_USERNAME,
-  paperkey = process.env.KB_PAPERKEY,
-  teamName = process.env.KB_TEAM_NAME,
-  reserveChannelName = process.env.KB_RESERVE_CHANNEL,
-  postChannelName = process.env.KB_POST_CHANNEL,
-  pastWeekLimit = parseInt(process.env.PAST_WEEK_LIMIT),
-  dataFile = process.env.DATA_FILE,
-  commandPrefix = process.env.COMMAND_PREFIX,
-  purgeCron = process.env.PURGE_CRON;
+  cron = require('node-cron'),
+  mysql = require('promise-mysql'),
+  config = require('./config'),
+  oneWeek = 7 * 24 * 60 * 60 * 1000;
 
-let bot = new Bot();
-let data = {};
-let reserveChannel,
-  postChannel;
+let bot = new Bot(),
+  data = {},
+  reserveChannel,
+  postChannel,
+  conn;
 
 function main() {
   initialize();
 }
 
 async function initialize() {
-  if (fs.existsSync(dataFile)) {
-    data = JSON.parse(fs.readFileSync(dataFile, 'utf-8'));
-  }
 
   try {
-    await bot.init(username, paperkey, {verbose: false});
+    await bot.init(config.username, config.paperkey, {verbose: false});
     console.log(`Reservation bot is initialized. It is logged in as ${bot.myInfo().username}`);
 
-    const convs = await bot.chat.listChannels(teamName);
-    const channels = convs.map(c => {return c.channel});
-    reserveChannel = channels.filter(c => c.topicName === reserveChannelName)[0];
-    postChannel = channels.filter(c => c.topicName === postChannelName)[0];
+    conn = await mysql.createConnection({
+      host: config.dbHost,
+      port: config.dbPort,
+      user: config.dbUser,
+      password: config.dbPass,
+      database: config.dbName
+    })
 
-    cron.schedule(purgeCron, purgeOldRecords);
-    for (const m of data.announcements) {
-      cron.schedule(m.cron, scheduleAnnouncement(m))
+    const convs = await bot.chat.listChannels(config.teamName);
+    const channels = convs.map(c => {return c.channel});
+    reserveChannel = channels.filter(c => c.topicName === config.reserveChannelName)[0];
+    postChannel = channels.filter(c => c.topicName === config.postChannelName)[0];
+
+    const announcements = await conn.query('SELECT * FROM announcements');
+    for (const m of announcements) {
+      cron.schedule(m.cron, scheduleAnnouncement(m));
     }
     await bot.chat.send(reserveChannel, 
       {body: `Reservation bot has started. I will listen for requests in this channel.`
@@ -49,30 +48,64 @@ async function initialize() {
   }
 }
 
+function parseArgs (message) {
+  const args = message.content.text.body.split(':')[1].split(';')
+  const retVal = [];
+  for (const a of args) {
+    retVal.push(a.trim());
+  }
+}
+
+async function getTypes(type) {
+  const retVal = [];
+  if (!['known', 'expected'].includes(type)) {
+    console.error("Invalid query type", type);
+    return retVal;
+  }
+  try {
+    for (const e of await conn.query('SELECT name FROM ' + type + '_types;')){
+      retVal.push(e.name);
+    }
+  } catch (err) {
+    console.error("Failed to query for expected types", err);
+  }
+  return retVal;
+}
+
+async function getReservations(from, to) {
+  try {
+    const retVal = await conn.query('SELECT * FROM RESERVATIONS WHERE date BETWEEN ? AND ?',
+    [from.toDateString(), to.toDateString()]);
+    return retVal
+  } catch (err) {
+    console.error("Failed to query for reservations", err);
+    return [];
+  }
+}
+
 function scheduleAnnouncement(announcement) {
   console.log("Scheduling announcement", announcement);
   return async () => {
     try {
+      const expectedTypes = await getTypes('expected');
+      const reservations = await getReservations(new Date(), new Date(Date.now() + oneWeek));
       let responseBody = announcement.text;
-      if (announcement.includeSchedule) {
-        for (const t of data.expectedTypes) {
+      if (announcement.include_schedule) {
+        for (const t of expectedTypes) {
           t.haveNextWeek = false;
         }
-        for (const r of data.reservations) {
-          const timeAfterNow = new Date(r.date).getTime() - new Date().getTime();
-          if (announcement.allReservations || (timeAfterNow > 0 && timeAfterNow < 7 * 24 * 60 * 60 * 1000)) {
-            responseBody += `${r.user}: ${r.type} on ${new Date(r.date).toDateString()}\n`;
-            for (const t of data.expectedTypes) {
-              if (r.type === t.name) {
-                t.haveNextWeek = true;
-              }
+        for (const r of reservations) {
+          responseBody += `${r.user}: ${r.type} on ${r.date}\n`;
+          for (const t of expectedTypes) {
+            if (r.type === t.name) {
+              t.have_next_week = true;
             }
           }
         }
-        if (announcement.requestVolunteers) {
+        if (announcement.request_volunteers) {
           responseBody += `\n`;
-          for (const t of data.expectedTypes) {
-            if (!t.haveNextWeek) responseBody += t.messageIfNone + `\n`;
+          for (const t of expectedTypes) {
+            if (!t.have_next_week) responseBody += t.message_if_none + `\n`;
           }
         }
       }
@@ -90,8 +123,9 @@ function scheduleAnnouncement(announcement) {
 
 async function displaySchedule(conversationId) {
   try {
+    const reservations = await getReservations(new Date(), new Date(Date.now() + oneWeek));
     let responseBody = `Reservations:\n`
-    for (const r of data.reservations) {
+    for (const r of reservations) {
       responseBody += `${r.user}: ${r.type} on ${new Date(r.date).toDateString()}\n`;
     }
     await bot.chat.send(conversationId, {
@@ -107,12 +141,14 @@ async function displaySchedule(conversationId) {
 
 async function makeReservation(message) {
   try {
+    const known_types = await getTypes('known');
+    const args = parseArgs(message);
     let newReservation = {
-      date: new Date(message.content.text.body.split(' ')[2]),
+      date: new Date(args[0]),
       user: message.sender.username,
-      type: message.content.text.body.split(' ')[3]
+      type: args[2]
     }
-    if (!data.known_types.includes(newReservation.type)) {
+    if (!known_types.includes(newReservation.type)) {
       await bot.chat.send(message.conversationId, {
         body: 'This is not a reservation type I recognize. Was it a typo?',
       });
@@ -122,21 +158,21 @@ async function makeReservation(message) {
         body: 'This reservation is in the past. Was that a typo?',
       });
     }
-    const conflictingReservations = data.reservations.filter(r => 
-      (new Date(r.date).getTime() === newReservation.date.getTime() &&
-        r.type === newReservation.type));
+    const conflictingReservations = await conn.query(
+      'SELECT * FROM reservations WHERE date = ? AND TYPE = ?', 
+      [newReservation.date.toDateString(), newReservation.type]);
     if (conflictingReservations.length > 0) {
       const c = conflictingReservations[0];
       console.log(`Existing reservation ${JSON.stringify(c)} conflicts with new reservation ${JSON.stringify(newReservation)}`);
       bot.chat.send(message.conversationId, {
         body: `This slot is already reserved:
-        ${c.user}: ${c.type} on ${new Date(c.date).toDateString()}.
+        ${c.user}: ${c.type} on ${c.date}.
         Delete this reservation first if you wish to replace it.`,
       });
       return;
     }
-    data.reservations.push(newReservation);
-    fs.writeFileSync(dataFile, JSON.stringify(data));
+    await conn.query('INSERT INTO reservations (type, date, user) VALUES (?, ?, ?)', 
+      [newReservation.type, newReservation.date.toDateString(), newReservation.user]);
     await bot.chat.send(message.conversationId, {
       body: 'Reservation made',
     });
@@ -157,19 +193,21 @@ async function makeReservationForOther(message) {
       });
       return;
     }
+    const args = parseArgs(message);
+    const known_types = await getTypes('known');
     let newReservation = {
-      date: new Date(message.content.text.body.split(' ')[2]),
-      user: message.content.text.body.split(' ')[4],
-      type: message.content.text.body.split(' ')[3]
+      date: new Date(args[0]),
+      user: args[1],
+      type: args[2]
     }
-    if (!data.known_types.includes(newReservation.type)) {
+    if (!known_types.includes(newReservation.type)) {
       await bot.chat.send(message.conversationId, {
         body: 'This is not a reservation type I recognize. I will make the reservation, please delete it if it was made in error',
       });
     }
-    const conflictingReservations = data.reservations.filter(r => 
-      (new Date(r.date).getTime() === newReservation.date.getTime() &&
-        r.type === newReservation.type));
+    const conflictingReservations = await conn.query(
+      'SELECT * FROM reservations WHERE date = ? AND TYPE = ?', 
+      [newReservation.date.toDateString(), newReservation.type]);
     if (conflictingReservations.length > 0) {
       const c = conflictingReservations[0];
       console.log(`Existing reservation ${JSON.stringify(c)} conflicts with new reservation ${JSON.stringify(newReservation)}`);
@@ -180,8 +218,8 @@ async function makeReservationForOther(message) {
       });
       return;
     }
-    data.reservations.push(newReservation);
-    fs.writeFileSync(dataFile, JSON.stringify(data));
+    await conn.query('INSERT INTO reservations (type, date, user) VALUES (?, ?, ?)', 
+      [newReservation.type, newReservation.date.toDateString(), newReservation.user]);
     await bot.chat.send(message.conversationId, {
       body: 'Reservation made.',
     });
@@ -195,30 +233,28 @@ async function makeReservationForOther(message) {
 
 async function deleteReservation(message) {
   try {
-    const date = new Date(message.content.text.body.split(' ')[2]);
+    const args = parseArgs(message);
+    const date = new Date(args[0]);
     const user = message.sender.username;
-    const type = message.content.text.body.split(' ')[3];
+    const type = args[1];
     let deletedCount = 0;
-    let remainingReservations = [];
-    for (const r of data.reservations) {
-      if (new Date(r.date).getTime() !== date.getTime() || r.type !== type) {
-        remainingReservations.push(r);
-        continue;
-      }
+    const conflictingReservations = await conn.query(
+      'SELECT * FROM reservations WHERE type = ? and date = ?',
+      [type, date.toDateString()]
+    );
+    for (const r of conflictingReservations) {
       if (r.user === user || data.admins.includes(user)) {
         deletedCount += 1;
+        conn.query('DELETE FROM reservations WHERE id = ?', [r.id]);
         continue;
       } else {
-        remainingReservations.push(r);
         await bot.chat.send(message.conversationId, {
           body: `You do not have permissions to delete reservation:
-          ${r.user}: ${r.type} on ${new Date(r.date).toDateString()}.
+          ${r.user}: ${r.type} on ${r.date}.
           Please contact an admin to delete it.`,
         });
       }
     }
-    data.reservations = remainingReservations;
-    fs.writeFileSync(dataFile, JSON.stringify(data));
     await bot.chat.send(message.conversationId, {
       body: `Deleted ${deletedCount} reservations.`,
     });
@@ -239,9 +275,9 @@ async function makeAdmin(message) {
       });
       return;
     }
-    const toAdd = message.content.text.body.split(' ')[2];
-    data.admins.push(toAdd);
-    fs.writeFileSync(dataFile, JSON.stringify(data));
+    const args = parseArgs(message);
+    const toAdd = args[0];
+    await conn.query('INSERT INTO admins (keybase_name) VALUES (?)', [toAdd]);
     await bot.chat.send(message.conversationId, {
       body: `Made ${toAdd} an admin`,
     });
@@ -262,23 +298,49 @@ async function removeAdmin(message) {
       });
       return;
     }
-    toRemove = message.content.text.body.split(' ')[2]
-    if (!data.admins.includes(toRemove)) {
-      await bot.chat.send(message.conversationId, {
-        body: `${toRemove} was not an admin`,
-      });
-    } else {
-      data.admins = data.admins.filter(a => a !== toRemove);
-      fs.writeFileSync(dataFile, JSON.stringify(data));
-      await bot.chat.send(message.conversationId, {
-        body: `${toRemove} is no longer an admin`,
-      });
-    }
+    const args = parseArgs(message);
+    const toRemove = args[0];
+    await conn.query('DELETE FROM admins WHERE keybase_name = ?', [toRemove]);
+    await bot.chat.send(message.conversationId, {
+      body: `${toRemove} is no longer an admin`,
+    });
   } catch (err) {
     console.log(err);
     await bot.chat.send(message.conversationId, {
       body: `Failed to remove admin privileges, see logs for details.`
     })
+  }
+}
+
+async function makeCron(message) {
+  try {
+    const user = message.sender.username;
+    if (!data.admins.includes(user)) {
+      await bot.chat.send(message.conversationId, {
+        body: `You do not have permissions to revoke admin status`,
+      });
+      return;
+    }
+    const args = parseArgs(message);
+    const announcement = {
+      cron: args[0],
+      text: args[1],
+      include_schedule: args[2] === 't',
+      request_volunteers: args[3] === 't'
+    };
+    await conn.query(
+      `INSERT INTO announcements (cron, text, include_schedule, request_volunteers)
+      VALUES (?, ?, ?, ?);`, [announcement.cron, announcement.text, 
+        announcement.include_schedule, announcement.request_volunteers]);
+    cron.schedule(announcement.cron, scheduleAnnouncement(announcement));
+    await bot.chat.send(message.conversationId, {
+      body: `Scheduled announcement`
+    });
+  } catch (err) {
+    console.log(err);
+    await bot.chat.send(message.conversationId, {
+      body: `Failed to schedule announcement, see logs for details.`
+    });
   }
 }
 
@@ -291,9 +353,8 @@ async function deleteAll(message) {
       });
       return;
     }
-    const numRecords = data.reservations.length;
-    data.reservations = [];
-    fs.writeFileSync(dataFile, JSON.stringify(data));
+    const numRecords = await conn.query('COUNT(*) FROM reservations;');
+    await conn.query('TRUNCATE TABLE reservations;')
     await bot.chat.send(message.conversationId, {
       body: `Deleted ${numRecords} records`,
     });
@@ -313,6 +374,7 @@ async function killBot(message) {
     });
     return;
   }
+  await conn.end();
   await bot.chat.send(message.conversationId, {
     body: `Shutting down`,
   });
@@ -322,8 +384,9 @@ async function killBot(message) {
 async function listAdmins(conversationId) {
   try {
     let responseBody = `Admins:\n`
-    for (const r of data.admins) {
-      responseBody += `${r}\n`;
+    const admins = await conn.query('SELECT keybase_name FROM admins;');
+    for (const r of admins) {
+      responseBody += `${r.keybase_name}\n`;
     }
     await bot.chat.send(conversationId, {
       body: responseBody,
@@ -341,8 +404,8 @@ async function displayHelp(conversationId) {
     body: 
 `Usage:
 !reservation-bot list -- list all reservations
-!reservation-bot make <date> <type> -- make a reservation
-!reservation-bot delete <date> <type> -- delete a reservation
+!reservation-bot make: <date> <type> -- make a reservation
+!reservation-bot delete: <date> <type> -- delete a reservation
 !reservation-bot list-admins -- list admin usernames, contact them if you need an admin
 !reservation-bot admin-help -- display admin commands
 This bot is a work in progress. Contact aeou1324 for support.`,
@@ -361,12 +424,14 @@ async function displayAdminHelp(message) {
     body: 
 `WARNING: These commands run without asking for confirmation, be careful!
 Admin usage:
-!reservation-bot make-for-other <date> <type> <username> -- make a reservation for someone else
+!reservation-bot make-for-other: <date>; <type>; <username> -- make a reservation for someone else
 !reservation-bot delete-all -- delete all reservations
 !reservation-bot reload -- reload config file
 !reservation-bot kill -- shut down the bot
-!reservation-bot make-admin <username> -- make a user an admin
-!reservation-bot remove-admin <username> -- revoke admin privileges`
+!reservation-bot make-admin: <username> -- make a user an admin
+!reservation-bot remove-admin: <username> -- revoke admin privileges
+!reservation-bot schedule-announcement: <cron>; <announcement>; <display schedule>; <request volunteers> -- schedule a new recurring announcement
+!reservation-bot list-announcements`
   })
 }
 
@@ -374,7 +439,7 @@ async function onMessage(message) {
   if (message.content.type !== 'text') {
     return;
   }
-  if (message.content.text.body.split(' ')[0] !== commandPrefix) {
+  if (message.content.text.body.split(' ')[0] !== config.commandPrefix) {
     return;
   }
   // TODO: Let admins add/delete announcements
@@ -382,19 +447,19 @@ async function onMessage(message) {
     case 'list':
       await displaySchedule(message.conversationId);
       break;
-    case 'make':
+    case 'make:':
       await makeReservation(message);
       break;
-    case 'make-for-other':
+    case 'make-for-other:':
       await makeReservationForOther(message);
       break;
-    case 'delete':
+    case 'delete:':
       await deleteReservation(message);
       break;
-    case 'make-admin':
+    case 'make-admin:':
       await makeAdmin(message);
       break;
-    case 'remove-admin':
+    case 'remove-admin:':
       await removeAdmin(message);
       break;
     case 'list-admins':
@@ -417,23 +482,13 @@ async function onMessage(message) {
       bot = new Bot();
       await initialize();
       break;
+    case 'schedule-announcement:':
+      await makeCron(message);
+      break;
     default:
       await bot.chat.send(message.conversationId, {
         body: `I didn't recognize that request`,
       });
-  }
-}
-
-function purgeOldRecords() {
-  try {
-    const initialRecords = data.reservations.length;
-    let cutoff = new Date();
-    cutoff.setDate(new Date().getDate() - 7 * pastWeekLimit);
-    data.reservations = data.reservations.filter(r => new Date(r.date).getTime() > cutoff.getTime());
-    fs.writeFileSync(dataFile, JSON.stringify(data));
-    console.log(`Purged ${initialRecords - data.reservations.length} records`);
-  } catch (err) {
-    console.log("Failed to purge old records", err);
   }
 }
 
