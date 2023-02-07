@@ -77,13 +77,9 @@ async function getTypes(type) {
   return retVal;
 }
 
-async function getAdmins() {
-  const retVal = [];
-  const admins = await conn.query('SELECT keybase_name FROM admins;');
-  for (const a of admins) {
-    retVal.push(a.keybase_name);
-  }
-  return retVal;
+async function isAdmin(user) {
+  const res = await conn.query('SELECT keybase_name FROM admins WHERE keybase_name = ?;', [user]);
+  return res.length == 1;
 }
 
 async function getReservations(from, to) {
@@ -103,7 +99,7 @@ function scheduleAnnouncement(announcement) {
     try {
       const expectedTypes = await getTypes('expected');
       const reservations = await getReservations(new Date(), new Date(Date.now() + oneWeek));
-      let responseBody = announcement.text;
+      let responseBody = announcement.text + `\n`;
       if (announcement.include_schedule) {
         for (const t of expectedTypes) {
           t.haveNextWeek = false;
@@ -202,8 +198,7 @@ async function makeReservation(message) {
 async function makeReservationForOther(message) {
   try {
     const user = message.sender.username;
-    const admins = await getAdmins();
-    if (!admins.includes(user)) {
+    if (!await isAdmin(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to make reservations for other users`,
       });
@@ -259,8 +254,7 @@ async function deleteReservation(message) {
       [type, date.toISODate()]
     );
     for (const r of conflictingReservations) {
-      const admins = await getAdmins();
-      if (r.user === user || admins.includes(user)) {
+      if (r.user === user || await isAdmin(user)) {
         deletedCount += 1;
         conn.query('DELETE FROM reservations WHERE id = ?;', [r.id]);
         continue;
@@ -286,8 +280,7 @@ async function deleteReservation(message) {
 async function makeAdmin(message) {
   try {
     const user = message.sender.username;
-    const admins = await getAdmins();
-    if (!admins.includes(user)) {
+    if (!await isAdmin(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to grant admin status`,
       });
@@ -310,8 +303,7 @@ async function makeAdmin(message) {
 async function addKnownType(message) {
   try {
     const user = message.sender.username;
-    const admins = await getAdmins();
-    if (!admins.includes(user)) {
+    if (!await isAdmin(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to add known event types`,
       });
@@ -334,8 +326,7 @@ async function addKnownType(message) {
 async function addExpectedType(message) {
   try {
     const user = message.sender.username;
-    const admins = await getAdmins();
-    if (!admins.includes(user)) {
+    if (!await isAdmin(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to add expected event types`,
       });
@@ -359,8 +350,7 @@ async function addExpectedType(message) {
 async function removeAdmin(message) {
   try {
     const user = message.sender.username;
-    const admins = await getAdmins();
-    if (!admins.includes(user)) {
+    if (!await isAdmin(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to revoke admin status`,
       });
@@ -383,8 +373,7 @@ async function removeAdmin(message) {
 async function deleteById(message) {
   try {
     const user = message.sender.username;
-    const admins = await getAdmins();
-    if (!admins.includes(user)) {
+    if (!await isAdmin(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to delete reservations by id`,
       });
@@ -407,14 +396,14 @@ async function deleteById(message) {
 async function makeCron(message) {
   try {
     const user = message.sender.username;
-    const admins = await getAdmins();
-    if (!admins.includes(user)) {
+    if (!await isAdmin(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to schedule announcements`,
       });
       return;
     }
     const args = parseArgs(message);
+    console.log('Scheduling announcement: ', args);
     const announcement = {
       cron: args[0],
       text: args[1],
@@ -440,8 +429,7 @@ async function makeCron(message) {
 async function listCrons(message) {
   try {
     const user = message.sender.username;
-    const admins = await getAdmins();
-    if (!admins.includes(user)) {
+    if (!await isAdmin(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to list announcements`,
       });
@@ -468,8 +456,7 @@ async function listCrons(message) {
 async function deleteCron(message) {
   try {
     const user = message.sender.username;
-    const admins = await getAdmins();
-    if (!admins.includes(user)) {
+    if (!await isAdmin(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to delete announcements`,
       });
@@ -492,8 +479,7 @@ async function deleteCron(message) {
 async function listTypes(type, message) {
   try {
     const user = message.sender.username;
-    const admins = await getAdmins();
-    if (!admins.includes(user)) {
+    if (!await isAdmin(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to list known event types`,
       });
@@ -522,8 +508,7 @@ async function listTypes(type, message) {
 async function deleteAll(message) {
   try {
     const user = message.sender.username;
-    const admins = await getAdmins();
-    if (!admins.includes(user)) {
+    if (!await isAdmin(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to delete all scheduled reservations`,
       });
@@ -545,8 +530,7 @@ async function deleteAll(message) {
 async function killBot(message) {
   const user = message.sender.username;
   try {
-    const admins = await getAdmins();
-    if (!admins.includes(user)) {
+    if (!await isAdmin(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to kill the bot`,
       });
@@ -568,7 +552,7 @@ async function killBot(message) {
 async function listAdmins(conversationId) {
   try {
     let responseBody = `Admins:\n`
-    const admins = await getAdmins();
+    const admins = await conn.query('SELECT keybase_name FROM admins;');
     for (const r of admins) {
       responseBody += `${r.keybase_name}\n`;
     }
@@ -598,8 +582,7 @@ This bot is a work in progress. Contact aeou1324 for support.`,
 
 async function displayAdminHelp(message) {
   const user = message.sender.username;
-  const admins = await getAdmins();
-  if (!admins.includes(user)) {
+  if (!await isAdmin(user)) {
     await bot.chat.send(message.conversationId, {
       body: `You do not have permissions to display admin help`,
     });
