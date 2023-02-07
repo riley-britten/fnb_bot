@@ -1,7 +1,9 @@
 {
   "dependencies": {
+    "dotenv": "^16.0.3",
     "keybase-bot": "^3.6.1",
-    "node-cron": "^3.0.2"
+    "node-cron": "^3.0.2",
+    "promise-mysql": "^5.2.0"
   },
   "name": "fnb_bot",
   "version": "1.0.0",
