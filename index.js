@@ -57,7 +57,7 @@ function parseArgs (message) {
 }
 
 async function getTypes(type) {
-  const retVal = [];
+  let retVal = [];
   if (!['known', 'expected'].includes(type)) {
     console.error("Invalid query type", type);
     return retVal;
@@ -83,7 +83,6 @@ async function getAdmins() {
   for (const a of admins) {
     retVal.push(a.keybase_name);
   }
-  console.log(retVal);
   return retVal;
 }
 
@@ -110,7 +109,7 @@ function scheduleAnnouncement(announcement) {
           t.haveNextWeek = false;
         }
         for (const r of reservations) {
-          responseBody += `${r.user}: ${r.type} on ${r.date}\n`;
+          responseBody += `${r.user}: ${r.type} on ${new Date(r.date).toDateString()}\n`;
           for (const t of expectedTypes) {
             if (r.type === t.name) {
               t.have_next_week = true;
@@ -141,7 +140,7 @@ async function displaySchedule(conversationId) {
     const reservations = await getReservations(new Date(), new Date(Date.now() + oneWeek));
     let responseBody = `Reservations:\n`
     for (const r of reservations) {
-      responseBody += `${r.id} ${r.user}: ${r.type} on ${new Date(r.date).toISODate()}\n`;
+      responseBody += `${r.id} ${r.user}: ${r.type} on ${new Date(r.date).toDateString()}\n`;
     }
     await bot.chat.send(conversationId, {
       body: responseBody,
@@ -503,7 +502,11 @@ async function listTypes(type, message) {
     const types = await getTypes(type);
     res = `Types:\n`;
     for (const t of types) {
-      res += t + `\n`
+      if (type === 'expected') {
+        res += t.name + `\n`;
+      } else {
+        res += t + `\n`;
+      }
     }
     await bot.chat.send(message.conversationId, {
       body: res
