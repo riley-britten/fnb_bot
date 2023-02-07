@@ -1,4 +1,4 @@
-const dotenv = require('dotenv');username
+const dotenv = require('dotenv');
 dotenv.config();
 
 module.exports = {
@@ -7,7 +7,7 @@ module.exports = {
   teamName:process.env.KB_TEAM_NAME,
   reserveChannelName:process.env.KB_RESERVE_CHANNEL,
   postChannelName:process.env.KB_POST_CHANNEL,
-  commandPrefix:process.env.COMMAND_PREFIX,
+  commandPrefix:process.env.COMMAND_PREFIX || '!reservation-bot',
   dbUser:process.env.DB_USER,
   dbPass:process.env.DB_PASS,
   dbHost:process.env.DB_HOST,

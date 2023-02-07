@@ -2,10 +2,10 @@ const Bot = require('keybase-bot'),
   cron = require('node-cron'),
   mysql = require('promise-mysql'),
   config = require('./config'),
+  utils = require('./utils'),
   oneWeek = 7 * 24 * 60 * 60 * 1000;
 
 let bot = new Bot(),
-  data = {},
   reserveChannel,
   postChannel,
   conn;
@@ -15,7 +15,6 @@ function main() {
 }
 
 async function initialize() {
-
   try {
     await bot.init(config.username, config.paperkey, {verbose: false});
     console.log(`Reservation bot is initialized. It is logged in as ${bot.myInfo().username}`);
@@ -33,7 +32,7 @@ async function initialize() {
     reserveChannel = channels.filter(c => c.topicName === config.reserveChannelName)[0];
     postChannel = channels.filter(c => c.topicName === config.postChannelName)[0];
 
-    const announcements = await conn.query('SELECT * FROM announcements');
+    const announcements = await conn.query('SELECT * FROM announcements;');
     for (const m of announcements) {
       cron.schedule(m.cron, scheduleAnnouncement(m));
     }
@@ -54,6 +53,7 @@ function parseArgs (message) {
   for (const a of args) {
     retVal.push(a.trim());
   }
+  return retVal;
 }
 
 async function getTypes(type) {
@@ -63,19 +63,34 @@ async function getTypes(type) {
     return retVal;
   }
   try {
-    for (const e of await conn.query('SELECT name FROM ' + type + '_types;')){
-      retVal.push(e.name);
+    if (type === 'known') {
+      const res = await conn.query('SELECT name FROM known_types;');
+      for (const r of res) {
+        retVal.push(r.name);
+      }
+    } else {
+      retVal = await conn.query('SELECT * FROM expected_types')
     }
   } catch (err) {
-    console.error("Failed to query for expected types", err);
+    console.error("Failed to query for types", err);
   }
+  return retVal;
+}
+
+async function getAdmins() {
+  const retVal = [];
+  const admins = await conn.query('SELECT keybase_name FROM admins;');
+  for (const a of admins) {
+    retVal.push(a.keybase_name);
+  }
+  console.log(retVal);
   return retVal;
 }
 
 async function getReservations(from, to) {
   try {
-    const retVal = await conn.query('SELECT * FROM RESERVATIONS WHERE date BETWEEN ? AND ?',
-    [from.toDateString(), to.toDateString()]);
+    const retVal = await conn.query('SELECT * FROM reservations WHERE date BETWEEN ? AND ?;',
+    [from.toISODate(), to.toISODate()]);
     return retVal
   } catch (err) {
     console.error("Failed to query for reservations", err);
@@ -126,7 +141,7 @@ async function displaySchedule(conversationId) {
     const reservations = await getReservations(new Date(), new Date(Date.now() + oneWeek));
     let responseBody = `Reservations:\n`
     for (const r of reservations) {
-      responseBody += `${r.user}: ${r.type} on ${new Date(r.date).toDateString()}\n`;
+      responseBody += `${r.id} ${r.user}: ${r.type} on ${new Date(r.date).toISODate()}\n`;
     }
     await bot.chat.send(conversationId, {
       body: responseBody,
@@ -146,7 +161,7 @@ async function makeReservation(message) {
     let newReservation = {
       date: new Date(args[0]),
       user: message.sender.username,
-      type: args[2]
+      type: args[1]
     }
     if (!known_types.includes(newReservation.type)) {
       await bot.chat.send(message.conversationId, {
@@ -158,9 +173,10 @@ async function makeReservation(message) {
         body: 'This reservation is in the past. Was that a typo?',
       });
     }
+    console.log(newReservation);
     const conflictingReservations = await conn.query(
-      'SELECT * FROM reservations WHERE date = ? AND TYPE = ?', 
-      [newReservation.date.toDateString(), newReservation.type]);
+      'SELECT * FROM reservations WHERE date = ? AND type = ?;', 
+      [newReservation.date.toISODate(), newReservation.type]);
     if (conflictingReservations.length > 0) {
       const c = conflictingReservations[0];
       console.log(`Existing reservation ${JSON.stringify(c)} conflicts with new reservation ${JSON.stringify(newReservation)}`);
@@ -171,8 +187,8 @@ async function makeReservation(message) {
       });
       return;
     }
-    await conn.query('INSERT INTO reservations (type, date, user) VALUES (?, ?, ?)', 
-      [newReservation.type, newReservation.date.toDateString(), newReservation.user]);
+    await conn.query('INSERT INTO reservations (type, date, user) VALUES (?, ?, ?);', 
+      [newReservation.type, newReservation.date.toISODate(), newReservation.user]);
     await bot.chat.send(message.conversationId, {
       body: 'Reservation made',
     });
@@ -187,7 +203,8 @@ async function makeReservation(message) {
 async function makeReservationForOther(message) {
   try {
     const user = message.sender.username;
-    if (!data.admins.includes(user)) {
+    const admins = await getAdmins();
+    if (!admins.includes(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to make reservations for other users`,
       });
@@ -206,20 +223,20 @@ async function makeReservationForOther(message) {
       });
     }
     const conflictingReservations = await conn.query(
-      'SELECT * FROM reservations WHERE date = ? AND TYPE = ?', 
-      [newReservation.date.toDateString(), newReservation.type]);
+      'SELECT * FROM reservations WHERE date = ? AND type = ?;', 
+      [newReservation.date.toISODate(), newReservation.type]);
     if (conflictingReservations.length > 0) {
       const c = conflictingReservations[0];
       console.log(`Existing reservation ${JSON.stringify(c)} conflicts with new reservation ${JSON.stringify(newReservation)}`);
       bot.chat.send(message.conversationId, {
         body: `This slot is already reserved:
-        ${c.user}: ${c.type} on ${new Date(c.date).toDateString()}.
+        ${c.user}: ${c.type} on ${new Date(c.date).toISODate()}.
         Delete this reservation first if you wish to replace it.`,
       });
       return;
     }
-    await conn.query('INSERT INTO reservations (type, date, user) VALUES (?, ?, ?)', 
-      [newReservation.type, newReservation.date.toDateString(), newReservation.user]);
+    await conn.query('INSERT INTO reservations (type, date, user) VALUES (?, ?, ?);', 
+      [newReservation.type, newReservation.date.toISODate(), newReservation.user]);
     await bot.chat.send(message.conversationId, {
       body: 'Reservation made.',
     });
@@ -239,13 +256,14 @@ async function deleteReservation(message) {
     const type = args[1];
     let deletedCount = 0;
     const conflictingReservations = await conn.query(
-      'SELECT * FROM reservations WHERE type = ? and date = ?',
-      [type, date.toDateString()]
+      'SELECT * FROM reservations WHERE type = ? and date = ?;',
+      [type, date.toISODate()]
     );
     for (const r of conflictingReservations) {
-      if (r.user === user || data.admins.includes(user)) {
+      const admins = await getAdmins();
+      if (r.user === user || admins.includes(user)) {
         deletedCount += 1;
-        conn.query('DELETE FROM reservations WHERE id = ?', [r.id]);
+        conn.query('DELETE FROM reservations WHERE id = ?;', [r.id]);
         continue;
       } else {
         await bot.chat.send(message.conversationId, {
@@ -269,7 +287,8 @@ async function deleteReservation(message) {
 async function makeAdmin(message) {
   try {
     const user = message.sender.username;
-    if (!data.admins.includes(user)) {
+    const admins = await getAdmins();
+    if (!admins.includes(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to grant admin status`,
       });
@@ -277,7 +296,7 @@ async function makeAdmin(message) {
     }
     const args = parseArgs(message);
     const toAdd = args[0];
-    await conn.query('INSERT INTO admins (keybase_name) VALUES (?)', [toAdd]);
+    await conn.query('INSERT INTO admins (keybase_name) VALUES (?);', [toAdd]);
     await bot.chat.send(message.conversationId, {
       body: `Made ${toAdd} an admin`,
     });
@@ -289,10 +308,60 @@ async function makeAdmin(message) {
   }
 }
 
+async function addKnownType(message) {
+  try {
+    const user = message.sender.username;
+    const admins = await getAdmins();
+    if (!admins.includes(user)) {
+      await bot.chat.send(message.conversationId, {
+        body: `You do not have permissions to add known event types`,
+      });
+      return;
+    }
+    const args = parseArgs(message);
+    const toAdd = args[0];
+    await conn.query('INSERT INTO known_types (name) VALUES (?);', [toAdd]);
+    await bot.chat.send(message.conversationId, {
+      body: `Made ${toAdd} a known event type`,
+    });
+  } catch (err) {
+    console.log(err);
+    await bot.chat.send(message.conversationId, {
+      body: `Failed to add known event type, see logs for details.`
+    })
+  }
+}
+
+async function addExpectedType(message) {
+  try {
+    const user = message.sender.username;
+    const admins = await getAdmins();
+    if (!admins.includes(user)) {
+      await bot.chat.send(message.conversationId, {
+        body: `You do not have permissions to add expected event types`,
+      });
+      return;
+    }
+    const args = parseArgs(message);
+    const toAdd = args[0];
+    const messageIfNone = args[1];
+    await conn.query('INSERT INTO expected_types (name, message_if_none) VALUES (?, ?);', [toAdd, messageIfNone]);
+    await bot.chat.send(message.conversationId, {
+      body: `Made ${toAdd} an expected event type`,
+    });
+  } catch (err) {
+    console.log(err);
+    await bot.chat.send(message.conversationId, {
+      body: `Failed to add expected event type, see logs for details.`
+    })
+  }
+}
+
 async function removeAdmin(message) {
   try {
     const user = message.sender.username;
-    if (!data.admins.includes(user)) {
+    const admins = await getAdmins();
+    if (!admins.includes(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to revoke admin status`,
       });
@@ -300,7 +369,7 @@ async function removeAdmin(message) {
     }
     const args = parseArgs(message);
     const toRemove = args[0];
-    await conn.query('DELETE FROM admins WHERE keybase_name = ?', [toRemove]);
+    await conn.query('DELETE FROM admins WHERE keybase_name = ?;', [toRemove]);
     await bot.chat.send(message.conversationId, {
       body: `${toRemove} is no longer an admin`,
     });
@@ -312,12 +381,37 @@ async function removeAdmin(message) {
   }
 }
 
+async function deleteById(message) {
+  try {
+    const user = message.sender.username;
+    const admins = await getAdmins();
+    if (!admins.includes(user)) {
+      await bot.chat.send(message.conversationId, {
+        body: `You do not have permissions to delete reservations by id`,
+      });
+      return;
+    }
+    const args = parseArgs(message);
+    const toRemove = args[0];
+    await conn.query('DELETE FROM reservations WHERE id = ?;', [toRemove]);
+    await bot.chat.send(message.conversationId, {
+      body: `Reservation ${toRemove} deleted`,
+    });
+  } catch (err) {
+    console.log(err);
+    await bot.chat.send(message.conversationId, {
+      body: `Failed to delete reservation, see logs for details.`
+    })
+  }
+}
+
 async function makeCron(message) {
   try {
     const user = message.sender.username;
-    if (!data.admins.includes(user)) {
+    const admins = await getAdmins();
+    if (!admins.includes(user)) {
       await bot.chat.send(message.conversationId, {
-        body: `You do not have permissions to revoke admin status`,
+        body: `You do not have permissions to schedule announcements`,
       });
       return;
     }
@@ -344,10 +438,89 @@ async function makeCron(message) {
   }
 }
 
+async function listCrons(message) {
+  try {
+    const user = message.sender.username;
+    const admins = await getAdmins();
+    if (!admins.includes(user)) {
+      await bot.chat.send(message.conversationId, {
+        body: `You do not have permissions to list announcements`,
+      });
+      return;
+    }
+    const announcements = await conn.query('SELECT * FROM announcements;');
+    res = `Announcements:\n`;
+    for (const a of announcements) {
+      res += `id: ${a.id}, cron: ${a.cron}, include_schedule: ${a.include_schedule}, request_volunteers: ${a.request_volunteers}
+      text:
+      ${a.text}\n`;
+    }
+    await bot.chat.send(message.conversationId, {
+      body: res
+    });
+  } catch (err) {
+    console.log(err);
+    await bot.chat.send(message.conversationId, {
+      body: `Failed to list announcements, see logs for details.`
+    });
+  }
+}
+
+async function deleteCron(message) {
+  try {
+    const user = message.sender.username;
+    const admins = await getAdmins();
+    if (!admins.includes(user)) {
+      await bot.chat.send(message.conversationId, {
+        body: `You do not have permissions to delete announcements`,
+      });
+      return;
+    }
+    const args = parseArgs(message);
+    const toDelete = args[0];
+    await conn.query('DELETE FROM announcements WHERE id = ?', [toDelete]);
+    await bot.chat.send(message.conversationId, {
+      body: `Announcement deleted`
+    });
+  } catch (err) {
+    console.log(err);
+    await bot.chat.send(message.conversationId, {
+      body: `Failed to delete announcement, see logs for details.`
+    });
+  }
+}
+
+async function listTypes(type, message) {
+  try {
+    const user = message.sender.username;
+    const admins = await getAdmins();
+    if (!admins.includes(user)) {
+      await bot.chat.send(message.conversationId, {
+        body: `You do not have permissions to list known event types`,
+      });
+      return;
+    }
+    const types = await getTypes(type);
+    res = `Types:\n`;
+    for (const t of types) {
+      res += t + `\n`
+    }
+    await bot.chat.send(message.conversationId, {
+      body: res
+    });
+  } catch (err) {
+    console.log(err);
+    await bot.chat.send(message.conversationId, {
+      body: `Failed to list types, see logs for details.`
+    });
+  }
+}
+
 async function deleteAll(message) {
   try {
     const user = message.sender.username;
-    if (!data.admins.includes(user)) {
+    const admins = await getAdmins();
+    if (!admins.includes(user)) {
       await bot.chat.send(message.conversationId, {
         body: `You do not have permissions to delete all scheduled reservations`,
       });
@@ -368,23 +541,31 @@ async function deleteAll(message) {
 
 async function killBot(message) {
   const user = message.sender.username;
-  if (!data.admins.includes(user)) {
+  try {
+    const admins = await getAdmins();
+    if (!admins.includes(user)) {
+      await bot.chat.send(message.conversationId, {
+        body: `You do not have permissions to kill the bot`,
+      });
+      return;
+    }
+    await conn.end();
     await bot.chat.send(message.conversationId, {
-      body: `You do not have permissions to kill the bot`,
+      body: `Shutting down`,
     });
-    return;
+    process.exit();
+  } catch (err) {
+    console.error(err);
+    await bot.chat.send(message.conversationId, {
+      body: `Failed to exit, see logs for details`,
+    });
   }
-  await conn.end();
-  await bot.chat.send(message.conversationId, {
-    body: `Shutting down`,
-  });
-  process.exit();
 }
 
 async function listAdmins(conversationId) {
   try {
     let responseBody = `Admins:\n`
-    const admins = await conn.query('SELECT keybase_name FROM admins;');
+    const admins = await getAdmins();
     for (const r of admins) {
       responseBody += `${r.keybase_name}\n`;
     }
@@ -414,7 +595,8 @@ This bot is a work in progress. Contact aeou1324 for support.`,
 
 async function displayAdminHelp(message) {
   const user = message.sender.username;
-  if (!data.admins.includes(user)) {
+  const admins = await getAdmins();
+  if (!admins.includes(user)) {
     await bot.chat.send(message.conversationId, {
       body: `You do not have permissions to display admin help`,
     });
@@ -431,7 +613,13 @@ Admin usage:
 !reservation-bot make-admin: <username> -- make a user an admin
 !reservation-bot remove-admin: <username> -- revoke admin privileges
 !reservation-bot schedule-announcement: <cron>; <announcement>; <display schedule>; <request volunteers> -- schedule a new recurring announcement
-!reservation-bot list-announcements`
+!reservation-bot list-announcements
+!reservation-bot delete-announcement: <id> -- delete recurring announcement by id
+!reservation-bot add-known: <type>
+!reservation-bot list-known
+!reservation-bot add-expected: <type>; <message if none>
+!reservation-bot list-expected
+!reservation-bot delete-by-id: <id> -- delete a reservation by id`
   })
 }
 
@@ -484,6 +672,27 @@ async function onMessage(message) {
       break;
     case 'schedule-announcement:':
       await makeCron(message);
+      break;
+    case 'list-announcements':
+      await listCrons(message);
+      break;
+    case 'delete-announcement:':
+      await deleteCron(message);
+      break;
+    case 'add-known:':
+      await addKnownType(message);
+      break;
+    case 'list-known':
+      await listTypes('known', message);
+      break;
+    case 'add-expected:':
+      await addExpectedType(message);
+      break;
+    case 'list-expected':
+      await listTypes('expected', message);
+      break;
+    case 'delete-by-id:':
+      await deleteById(message);
       break;
     default:
       await bot.chat.send(message.conversationId, {
